@@ -3,3 +3,12 @@
 .git
 Dockerfile
 Dockerfile.centos7
+
+# Don't copy build artifacts
+*.o
+*.d
+tippecanoe
+tippecanoe-*
+tile-join
+unit
+.claude/

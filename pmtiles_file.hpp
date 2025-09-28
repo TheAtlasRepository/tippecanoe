@@ -8,6 +8,7 @@ bool pmtiles_has_suffix(const char *filename);
 void check_pmtiles(const char *filename, char **argv, bool forcetable);
 
 void mbtiles_map_image_to_pmtiles(char *dbname, metadata m, bool tile_compression, bool quiet, bool quiet_progress);
+void mbtiles_map_image_to_pmtiles_stream(char *dbname, metadata m, bool tile_compression, bool quiet, bool quiet_progress, std::ostream &output_stream);
 
 std::vector<pmtiles::entry_zxy> pmtiles_entries_tms(const char *pmtiles_map, int minzoom, int maxzoom);
 std::pair<uint64_t, uint32_t> pmtiles_get_tile(const char *pmtiles_map, int z, int x, int y);

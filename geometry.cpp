@@ -1027,3 +1027,153 @@ drawvec checkerboard_anchors(drawvec const &geom, int tx, int ty, int z, unsigne
 
 	return out;
 }
+
+// Centroid calculation functions for dual layer generation
+
+drawvec calculate_point_centroid(const drawvec& geom) {
+	// For points, the centroid is just the point itself
+	if (geom.empty()) {
+		return drawvec();
+	}
+	
+	// Find the first point in the geometry
+	for (size_t i = 0; i < geom.size(); i++) {
+		if (geom[i].op == VT_MOVETO) {
+			drawvec centroid;
+			centroid.push_back(draw(VT_MOVETO, geom[i].x, geom[i].y));
+			return centroid;
+		}
+	}
+	
+	return drawvec();
+}
+
+drawvec calculate_line_centroid(const drawvec& geom) {
+	if (geom.empty()) {
+		return drawvec();
+	}
+	
+	// Calculate centroid along the line using length-weighted average
+	double total_length = 0.0;
+	double weighted_x = 0.0;
+	double weighted_y = 0.0;
+	
+	for (size_t i = 1; i < geom.size(); i++) {
+		if (geom[i].op == VT_LINETO && 
+		    (geom[i-1].op == VT_MOVETO || geom[i-1].op == VT_LINETO)) {
+			
+			double dx = geom[i].x - geom[i-1].x;
+			double dy = geom[i].y - geom[i-1].y;
+			double segment_length = sqrt(dx * dx + dy * dy);
+			
+			if (segment_length > 0) {
+				// Midpoint of segment
+				double mid_x = (geom[i].x + geom[i-1].x) / 2.0;
+				double mid_y = (geom[i].y + geom[i-1].y) / 2.0;
+				
+				weighted_x += mid_x * segment_length;
+				weighted_y += mid_y * segment_length;
+				total_length += segment_length;
+			}
+		}
+	}
+	
+	drawvec centroid;
+	if (total_length > 0) {
+		long long centroid_x = (long long)(weighted_x / total_length);
+		long long centroid_y = (long long)(weighted_y / total_length);
+		centroid.push_back(draw(VT_MOVETO, centroid_x, centroid_y));
+	}
+	
+	return centroid;
+}
+
+drawvec calculate_polygon_centroid(const drawvec& geom) {
+	if (geom.empty()) {
+		return drawvec();
+	}
+	
+	// Use the existing centroid calculation logic from clip.cpp
+	// Calculate centroid using area-weighted method
+	long long xtotal = 0;
+	long long ytotal = 0;
+	long long count = 0;
+	double total_area = 0;
+	
+	for (size_t i = 0; i < geom.size(); i++) {
+		if (geom[i].op == VT_MOVETO) {
+			size_t j;
+			for (j = i + 1; j < geom.size(); j++) {
+				if (geom[j].op != VT_LINETO) {
+					break;
+				}
+			}
+			
+			// Calculate area and centroid for this ring
+			double ring_area = 0;
+			long long ring_x = 0;
+			long long ring_y = 0;
+			long long ring_count = 0;
+			
+			for (size_t k = i; k + 1 < j && k + 1 < geom.size(); k++) {
+				ring_x += geom[k].x;
+				ring_y += geom[k].y;
+				ring_count++;
+				
+				// Calculate area contribution using shoelace formula
+				if (k + 1 < j) {
+					ring_area += (double)geom[k].x * (double)geom[k+1].y;
+					ring_area -= (double)geom[k+1].x * (double)geom[k].y;
+				}
+			}
+			
+			ring_area = fabs(ring_area) / 2.0;
+			
+			if (ring_count > 0 && ring_area > 0) {
+				// Weight by area (outer rings positive, inner rings negative)
+				double area_weight = (get_area(geom, i, j) > 0) ? ring_area : -ring_area;
+				
+				xtotal += (ring_x / ring_count) * area_weight;
+				ytotal += (ring_y / ring_count) * area_weight;
+				total_area += area_weight;
+				count++;
+			}
+			
+			i = j - 1;
+		}
+	}
+	
+	drawvec centroid;
+	if (total_area > 0 && count > 0) {
+		long long centroid_x = (long long)(xtotal / total_area);
+		long long centroid_y = (long long)(ytotal / total_area);
+		centroid.push_back(draw(VT_MOVETO, centroid_x, centroid_y));
+	} else if (count > 0) {
+		// Fallback to simple average if area calculation fails
+		for (size_t i = 0; i < geom.size(); i++) {
+			if (geom[i].op == VT_MOVETO || geom[i].op == VT_LINETO) {
+				xtotal += geom[i].x;
+				ytotal += geom[i].y;
+				count++;
+			}
+		}
+		if (count > 0) {
+			centroid.push_back(draw(VT_MOVETO, xtotal / count, ytotal / count));
+		}
+	}
+	
+	return centroid;
+}
+
+drawvec calculate_geometry_centroid(const drawvec& geom, int geometry_type) {
+	switch (geometry_type) {
+		case VT_POINT:
+			return calculate_point_centroid(geom);
+		case VT_LINE:
+			return calculate_line_centroid(geom);
+		case VT_POLYGON:
+			return calculate_polygon_centroid(geom);
+		default:
+			return drawvec();
+	}
+}

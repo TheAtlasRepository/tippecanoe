@@ -48,6 +48,7 @@
 #include "attribute.hpp"
 #include "thread.hpp"
 #include "shared_borders.hpp"
+#include "pmtiles/pmtiles.hpp"
 
 extern "C" {
 #include "jsonpull/jsonpull.h"
@@ -56,6 +57,80 @@ extern "C" {
 #include "plugin.hpp"
 
 #define CMD_BITS 3
+
+// Tile streaming functions
+static bool stream_header_written = false;
+
+static inline void write_le32(uint32_t v) {
+    unsigned char b[4];
+    b[0] = (unsigned char)(v & 0xFF);
+    b[1] = (unsigned char)((v >> 8) & 0xFF);
+    b[2] = (unsigned char)((v >> 16) & 0xFF);
+    b[3] = (unsigned char)((v >> 24) & 0xFF);
+    fwrite(b, 1, 4, stdout);
+}
+
+static inline void write_le64(uint64_t v) {
+    unsigned char b[8];
+    b[0] = (unsigned char)(v & 0xFF);
+    b[1] = (unsigned char)((v >> 8) & 0xFF);
+    b[2] = (unsigned char)((v >> 16) & 0xFF);
+    b[3] = (unsigned char)((v >> 24) & 0xFF);
+    b[4] = (unsigned char)((v >> 32) & 0xFF);
+    b[5] = (unsigned char)((v >> 40) & 0xFF);
+    b[6] = (unsigned char)((v >> 48) & 0xFF);
+    b[7] = (unsigned char)((v >> 56) & 0xFF);
+    fwrite(b, 1, 8, stdout);
+}
+
+void stream_tile_header_once() {
+    if (stream_header_written) return;
+    if (stream_tiles_binary) {
+        // Binary header: magic "TPN1" + metadata JSON length + JSON bytes
+        const char magic[4] = {'T','P','N','1'};
+        fwrite(magic, 1, 4, stdout);
+        const char *meta = "{\"format\":\"pbf\",\"min_zoom\":0,\"max_zoom\":14}";
+        uint32_t len = (uint32_t) strlen(meta);
+        write_le32(len);
+        fwrite(meta, 1, len, stdout);
+        fflush(stdout);
+    } else {
+        printf("TIPPECANOE_STREAM_V1\n");
+        if (dual_layers) {
+            // Include placeholder tilestats so PMTiles viewers recognize both layers
+            printf("metadata: {\"format\":\"pbf\",\"min_zoom\":0,\"max_zoom\":14,\"vector_layers\":[{\"id\":\"%s\",\"description\":\"Original geometries\",\"minzoom\":0,\"maxzoom\":14},{\"id\":\"%s\",\"description\":\"Centroid points\",\"minzoom\":0,\"maxzoom\":14}],\"tilestats\":{\"layerCount\":2,\"layers\":[{\"layer\":\"%s\",\"count\":0,\"geometry\":\"Polygon\",\"attributeCount\":0,\"attributes\":[]},{\"layer\":\"%s\",\"count\":0,\"geometry\":\"Point\",\"attributeCount\":0,\"attributes\":[]}]}}\n", 
+                   geometry_layer_name.c_str(), centroid_layer_name.c_str(),
+                   geometry_layer_name.c_str(), centroid_layer_name.c_str());
+        } else {
+            printf("metadata: {\"format\":\"pbf\",\"min_zoom\":0,\"max_zoom\":14,\"vector_layers\":[{\"id\":\"default\",\"description\":\"Default layer\",\"minzoom\":0,\"maxzoom\":14}]}\n");
+        }
+        fflush(stdout);
+    }
+    stream_header_written = true;
+}
+
+void stream_tile_to_stdout(int z, unsigned int x, unsigned int y, const char *tile_data, size_t tile_size) {
+    uint64_t tile_id = pmtiles::zxy_to_tileid(z, x, y);
+    if (stream_tiles_binary) {
+        // Frame: 0x01 | tile_id (LE64) | size (LE32) | bytes
+        unsigned char type = 0x01;
+        fwrite(&type, 1, 1, stdout);
+        write_le64(tile_id);
+        write_le32((uint32_t) tile_size);
+        fwrite(tile_data, 1, tile_size, stdout);
+        fflush(stdout);
+    } else {
+        printf("TILE\n");
+        printf("tile_id: %llu\n", (unsigned long long) tile_id);
+        printf("size: %zu\n", tile_size);
+        printf("data: ");
+        for (size_t i = 0; i < tile_size; i++) {
+            printf("%02x", (unsigned char)tile_data[i]);
+        }
+        printf("\n");
+        fflush(stdout);
+    }
+}
 
 // Offset coordinates to keep them positive
 #define COORD_OFFSET (4LL << 32)
@@ -1818,11 +1893,12 @@ long long write_tile(decompressor *geoms, std::atomic<long long> *geompos_in, ch
 				break;
 			}
 
-			std::string &layername = (*layer_unmaps)[sf.segment][sf.layer];
-			if (layers.count(layername) == 0) {
-				layers.emplace(layername, layer_features());
+			std::string &orig_layername = (*layer_unmaps)[sf.segment][sf.layer];
+			std::string target_geom_layername = dual_layers ? geometry_layer_name : orig_layername;
+			if (layers.count(target_geom_layername) == 0) {
+				layers.emplace(target_geom_layername, layer_features());
 			}
-			struct layer_features &layer = layers.find(layername)->second;
+			struct layer_features &layer = layers.find(target_geom_layername)->second;
 			std::vector<std::shared_ptr<serial_feature>> &features = layer.features;
 
 			if (sf.t == VT_POINT) {
@@ -2175,9 +2251,44 @@ long long write_tile(decompressor *geoms, std::atomic<long long> *geompos_in, ch
 						tile_detail = sf.extra_detail;
 					}
 
-					features.push_back(std::make_shared<serial_feature>(sf));
+					// If dual layers are enabled, add features to named layers instead of default features vector
+					std::shared_ptr<serial_feature> added_feature;
+					if (dual_layers) {
+						// Ensure geometry layer container exists
+						if (layers.count(geometry_layer_name) == 0) {
+							layers.emplace(geometry_layer_name, layer_features());
+						}
+						// Add original feature to geometry layer
+						added_feature = std::make_shared<serial_feature>(sf);
+						layers.find(geometry_layer_name)->second.features.push_back(added_feature);
+						
+						// Ensure centroid layer container exists
+						if (layers.count(centroid_layer_name) == 0) {
+							layers.emplace(centroid_layer_name, layer_features());
+						}
+						// Generate and add centroid feature
+						// Use pre-calculated centroid if available, otherwise calculate it
+						drawvec cgeom;
+						if (!sf.original_centroid.empty()) {
+							// Use the pre-calculated centroid from feature creation
+							cgeom = sf.original_centroid;
+						} else {
+							// Fallback to calculating from current geometry (for backward compatibility)
+							cgeom = calculate_geometry_centroid(sf.geometry, sf.t);
+						}
+						if (!cgeom.empty()) {
+							serial_feature csf = sf;
+							csf.geometry = std::move(cgeom);
+							csf.t = VT_POINT;
+							layers.find(centroid_layer_name)->second.features.push_back(std::make_shared<serial_feature>(csf));
+						}
+					} else {
+						// Normal mode: add to default features vector
+						added_feature = std::make_shared<serial_feature>(sf);
+						features.push_back(added_feature);
+					}
 
-					unsimplified_geometry_size += features.back()->geometry.size() * sizeof(draw);
+					unsimplified_geometry_size += added_feature->geometry.size() * sizeof(draw);
 					if (unsimplified_geometry_size > 10 * 1024 * 1024 && !additional[A_DETECT_SHARED_BORDERS]) {
 						// we should be safe to simplify here with P_SIMPLIFY_SHARED_NODES, since they will
 						// have been assembled globally, although that also means that simplification
@@ -2869,7 +2980,11 @@ long long write_tile(decompressor *geoms, std::atomic<long long> *geompos_in, ch
 					exit(EXIT_IMPOSSIBLE);
 				}
 
-				if (outdb != NULL) {
+				if (stream_tiles) {
+					// Stream individual tiles to stdout
+					stream_tile_header_once();
+					stream_tile_to_stdout(z, tx, ty, (const char*)compressed.data(), compressed.size());
+				} else if (outdb != NULL) {
 					mbtiles_write_tile(outdb, z, tx, ty, compressed.data(), compressed.size());
 				} else if (outdir != NULL) {
 					dir_write_tile(outdir, z, tx, ty, compressed);

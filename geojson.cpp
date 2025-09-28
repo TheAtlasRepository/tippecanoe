@@ -39,6 +39,7 @@
 #include "geojson-loop.hpp"
 #include "milo/dtoa_milo.h"
 #include "errors.hpp"
+#include "main.hpp"  // For dual_layers and layer names
 
 int serialize_geojson_feature(struct serialization_state *sst, json_object *geometry, json_object *properties, json_object *id, int layer, json_object *tippecanoe, json_object *feature, std::string const &layername) {
 	json_object *geometry_type = json_hash_get(geometry, "type");
@@ -214,6 +215,11 @@ int serialize_geojson_feature(struct serialization_state *sst, json_object *geom
 	sf.seq = *(sst->layer_seq);
 	sf.full_keys = std::move(full_keys);
 	sf.full_values = std::move(values);
+
+	// Calculate centroid once at feature creation time for dual layers
+	if (dual_layers && !dv.empty()) {
+		sf.original_centroid = calculate_geometry_centroid(dv, sf.t);
+	}
 
 	return serialize_feature(sst, sf, tippecanoe_layername);
 }

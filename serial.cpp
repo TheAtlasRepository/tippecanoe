@@ -948,3 +948,50 @@ void coerce_value(std::string const &key, int &vt, std::string &val, std::unorde
 		}
 	}
 }
+
+// Implementation for dual layer feature creation
+void dual_layer_feature::create_centroid_feature() {
+	if (!original) {
+		return;
+	}
+	
+	// Create a copy of the original feature for the centroid
+	centroid = std::make_shared<serial_feature>(*original);
+	
+	// Use pre-calculated centroid if available, otherwise calculate it
+	drawvec centroid_geom;
+	if (!original->original_centroid.empty()) {
+		// Use the pre-calculated centroid from feature creation
+		centroid_geom = original->original_centroid;
+	} else {
+		// Fallback to calculating from current geometry (for backward compatibility)
+		centroid_geom = calculate_geometry_centroid(original->geometry, original->t);
+	}
+	
+	if (!centroid_geom.empty()) {
+		// Set the centroid geometry
+		centroid->geometry = centroid_geom;
+		centroid->t = VT_POINT; // Force to point type
+		
+		// Add a geometry_type attribute to track the original geometry type
+		std::string geometry_type_name;
+		switch (original->t) {
+			case VT_POINT:
+				geometry_type_name = "point";
+				break;
+			case VT_LINE:
+				geometry_type_name = "line";
+				break;
+			case VT_POLYGON:
+				geometry_type_name = "polygon";
+				break;
+			default:
+				geometry_type_name = "unknown";
+				break;
+		}
+		
+		// Add the geometry_type attribute to the centroid feature
+		centroid->full_keys.push_back(std::make_shared<std::string>("geometry_type"));
+		centroid->full_values.push_back(serial_val(mvt_string, geometry_type_name));
+	}
+}

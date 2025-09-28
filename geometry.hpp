@@ -168,6 +168,12 @@ std::string overzoom(std::vector<input_tile> const &tiles, int nz, int nx, int n
 
 draw center_of_mass_mp(const drawvec &dv);
 
+// Centroid calculation functions for dual layer generation
+drawvec calculate_point_centroid(const drawvec& geom);
+drawvec calculate_line_centroid(const drawvec& geom);
+drawvec calculate_polygon_centroid(const drawvec& geom);
+drawvec calculate_geometry_centroid(const drawvec& geom, int geometry_type);
+
 void get_quadkey_bounds(long long xmin, long long ymin, long long xmax, long long ymax,
 			unsigned long long *start, unsigned long long *end);
 

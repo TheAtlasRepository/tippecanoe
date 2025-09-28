@@ -70,6 +70,15 @@ extern std::vector<order_field> order_by;
 #define ORDER_BY_SIZE "\200size"
 extern bool order_by_size;
 
+// Streaming options
+extern bool stream_tiles;
+extern bool stream_tiles_binary;
+
+// Dual-layer options
+extern bool dual_layers;
+extern std::string geometry_layer_name;
+extern std::string centroid_layer_name;
+
 int mkstemp_cloexec(char *name);
 FILE *fopen_oflag(const char *name, const char *mode, int oflag);
 bool progress_time();

@@ -747,6 +747,27 @@ $ docker run -it --rm \
 The commands above will build a Docker image from the source and compile the
 latest version. The image supports all tippecanoe flags and options.
 
+Streaming Tiles (continuous)
+----------------------------
+
+- Enable `--stream-tiles` to emit each tile as it is generated to stdout.
+- Logs and progress go to stderr; stdout is stream data only.
+- Stream format (human-readable framing):
+  - First two lines once: `TIPPECANOE_STREAM_V1` and `metadata: { ... }` (JSON).
+  - For each tile: lines `TILE`, `tile_id: <uint64>`, `size: <bytes>`, `data: <hex-encoded tile bytes>`, then newline.
+
+Examples:
+
+```bash
+# Stream continuously to stdout; consume with a reader
+docker run --rm -v "$PWD":"/work" -w /work tippecanoe \
+  --stream-tiles -q -zg -l layer input.geojson |
+  your-consumer
+```
+
+Notes:
+- In streaming mode, `-o`/`-e` are ignored for tile emission; the stream is the primary output.
+
 Examples
 ------
 

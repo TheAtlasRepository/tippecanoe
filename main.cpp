@@ -32,6 +32,7 @@
 #include <set>
 #include <map>
 #include <cmath>
+#include <fstream>
 
 #if defined(__APPLE__) || defined(__FreeBSD__)
 #include <sys/types.h>
@@ -98,6 +99,15 @@ long long extend_zooms_max = 0;
 int retain_points_multiplier = 1;
 std::vector<std::string> unidecode_data;
 size_t maximum_string_attribute_length = 0;
+
+// Dual layer and streaming options
+bool dual_layers = false;
+std::string geometry_layer_name = "default";
+std::string centroid_layer_name = "centroids";
+// Continuous tile streaming
+bool stream_tiles = false;
+// Optional binary framing for streaming output
+bool stream_tiles_binary = false;
 
 std::vector<order_field> order_by;
 bool order_reverse;
@@ -2822,6 +2832,50 @@ std::pair<int, metadata> read_input(std::vector<source> &sources, char *fname, i
 		ai->second.maxzoom = maxzoom;
 	}
 
+	// If dual layers are enabled, ensure both geometry and centroid layers are in metadata
+	if (dual_layers) {
+		// When dual layers are enabled, the tilestats were collected under the original layer names
+		// (e.g., "test_dual_layers") but we need them under our custom layer names.
+		// So we need to rename/remap the existing layers.
+		
+		std::map<std::string, layermap_entry> remapped_lm;
+		
+		// First, check if our desired layer names already exist (they shouldn't in the old code path)
+		auto centroid_it = merged_lm.find(centroid_layer_name);
+		auto geometry_it = merged_lm.find(geometry_layer_name);
+		
+		if (centroid_it != merged_lm.end() && geometry_it != merged_lm.end()) {
+			// New code path: layers are already correctly named
+			centroid_it->second.description = "Centroid points";
+			geometry_it->second.description = "Original geometries";
+		} else {
+			// Old code path: need to rename the original layer to our geometry layer
+			// and create/copy the centroid layer
+			
+			// Find the original layer (should be the first/only one if not using new code)
+			if (!merged_lm.empty()) {
+				auto original_layer = merged_lm.begin();
+				
+				// Copy the original layer's stats to the geometry layer
+				layermap_entry geometry_entry = original_layer->second;
+				geometry_entry.description = "Original geometries";
+				remapped_lm.insert(std::make_pair(geometry_layer_name, geometry_entry));
+				
+				// Create centroid layer with similar stats but adjusted for points
+				layermap_entry centroid_entry = original_layer->second;
+				centroid_entry.description = "Centroid points";
+				// Centroids are always points, so adjust the geometry counts
+				centroid_entry.points = centroid_entry.points + centroid_entry.polygons + centroid_entry.lines;
+				centroid_entry.lines = 0;
+				centroid_entry.polygons = 0;
+				remapped_lm.insert(std::make_pair(centroid_layer_name, centroid_entry));
+				
+				// Replace the original map with our remapped one
+				merged_lm = remapped_lm;
+			}
+		}
+	}
+
 	metadata m = make_metadata(fname, minzoom, maxzoom, minlat, minlon, maxlat, maxlon, minlat2, minlon2, maxlat2, maxlon2, midlat, midlon, attribution, merged_lm, true, description, !prevent[P_TILE_STATS], attribute_descriptions, "tippecanoe", commandline, strategies, basezoom, droprate, retain_points_multiplier);
 	if (outdb != NULL) {
 		mbtiles_write_metadata(outdb, m, forcetable);
@@ -3179,6 +3233,13 @@ int main(int argc, char **argv) {
 		{"prefer-radix-sort", no_argument, &additional[A_PREFER_RADIX_SORT], 1},
 		{"help", no_argument, 0, 'H'},
 
+		{"Dual layer generation and streaming output", 0, 0, 0},
+		{"dual-layers", no_argument, 0, '~'},
+		{"geometry-layer", required_argument, 0, '~'},
+		{"centroid-layer", required_argument, 0, '~'},
+		{"stream-tiles", no_argument, 0, '~'},
+		{"stream-tiles-binary", no_argument, 0, '~'},
+
 		{0, 0, 0, 0},
 	};
 
@@ -3307,7 +3368,18 @@ int main(int argc, char **argv) {
 				unidecode_data = read_unidecode(optarg);
 			} else if (strcmp(opt, "maximum-string-attribute-length") == 0) {
 				maximum_string_attribute_length = atoll_require(optarg, "Maximum string attribute length");
-			} else {
+            } else if (strcmp(opt, "dual-layers") == 0) {
+                dual_layers = true;
+            } else if (strcmp(opt, "geometry-layer") == 0) {
+                geometry_layer_name = optarg;
+            } else if (strcmp(opt, "centroid-layer") == 0) {
+                centroid_layer_name = optarg;
+            } else if (strcmp(opt, "stream-tiles") == 0) {
+                stream_tiles = true;
+            } else if (strcmp(opt, "stream-tiles-binary") == 0) {
+                stream_tiles = true;
+                stream_tiles_binary = true;
+            } else {
 				fprintf(stderr, "%s: Unrecognized option --%s\n", argv[0], opt);
 				exit(EXIT_ARGS);
 			}
@@ -3784,7 +3856,8 @@ int main(int argc, char **argv) {
 		exit(EXIT_ARGS);
 	}
 
-	if (out_mbtiles != NULL) {
+	// When streaming tiles continuously, do not open an MBTiles database.
+	if (!stream_tiles && out_mbtiles != NULL) {
 		if (force) {
 			unlink(out_mbtiles);
 		} else {
@@ -3836,9 +3909,9 @@ int main(int argc, char **argv) {
 		mbtiles_close(outdb, argv[0]);
 	}
 
-	if (pmtiles_has_suffix(out_mbtiles)) {
-		mbtiles_map_image_to_pmtiles(out_mbtiles, std::get<1>(input_ret), prevent[P_TILE_COMPRESSION] == 0, quiet, quiet_progress);
-	}
+	    if (!stream_tiles && out_mbtiles != NULL && pmtiles_has_suffix(out_mbtiles)) {
+	        mbtiles_map_image_to_pmtiles(out_mbtiles, std::get<1>(input_ret), prevent[P_TILE_COMPRESSION] == 0, quiet, quiet_progress);
+	    }
 
 #ifdef MTRACE
 	muntrace();
@@ -3854,6 +3927,8 @@ int main(int argc, char **argv) {
 	if (filter != NULL) {
 		json_free(filter);
 	}
+
+		// No footer when streaming: stdout is binary PMTiles content only.
 
 	return ret;
 }

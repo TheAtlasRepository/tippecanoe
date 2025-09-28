@@ -143,6 +143,11 @@ struct serial_feature {
 	long long bbox[4] = {0, 0, 0, 0};
 	drawvec edge_nodes;  // what nodes at the tile edge were added during clipping?
 
+	// Pre-calculated centroid for dual layer processing
+	// This is calculated once at feature creation time to avoid
+	// multiple centroids per feature across tiles
+	drawvec original_centroid;
+
 #define FEATURE_DROPPED -1
 #define FEATURE_KEPT 0
 #define FEATURE_ADDED_FOR_MULTIPLIER_DENSITY INT_MAX
@@ -169,6 +174,23 @@ struct serial_feature {
 	int z;	// tile being produced
 	int tx;
 	int ty;
+};
+
+// Structure for dual layer feature generation
+struct dual_layer_feature {
+	std::shared_ptr<serial_feature> original;  // Original geometry feature
+	std::shared_ptr<serial_feature> centroid;  // Centroid point feature
+	std::string source_layer;                   // Original layer name
+	
+	dual_layer_feature(std::shared_ptr<serial_feature> orig, const std::string& layer_name)
+	    : original(orig), source_layer(layer_name) {
+		if (orig) {
+			create_centroid_feature();
+		}
+	}
+	
+private:
+	void create_centroid_feature();
 };
 
 std::string serialize_feature(serial_feature *sf, long long wx, long long wy);
