@@ -12,10 +12,34 @@ This is the Atlas fork of [Felt's Tippecanoe](https://github.com/felt/tippecanoe
 
 Automatic generation of dual layers (geometry + centroids) in a single pass for improved rendering performance at different zoom levels. This is the primary feature we're actively using from this fork.
 
+**The Problem This Solves:**
+
+Previously, generating tiles with both full geometries and centroid representations required a two-step process:
+
+1. Run tippecanoe on the full geometry dataset → `geometry.pmtiles`
+2. Run tippecanoe on a centroid-only dataset → `centroids.pmtiles`
+3. Run `tile-join` to merge both layers into a single tileset
+
+This was:
+- **Slow** - Three separate processes for each dataset
+- **Complex** - Multiple intermediate files and coordination
+- **Wasteful** - Redundant processing of the same source data
+- **Error-prone** - Any step failing meant retrying the entire pipeline
+
+**Our Solution:**
+
+With dual layer generation, tippecanoe now:
+- Generates both layers in a **single pass**
+- Outputs a single PMTiles file with both `default` (geometry) and `centroids` layers
+- Calculates centroids automatically using geometry-type-specific algorithms
+- No need for tile-join or intermediate files
+
 **Benefits:**
-- Single tippecanoe invocation generates both geometry and centroid layers
-- Improved map rendering performance at lower zoom levels
-- Centroids are pre-calculated and optimized for point representation of polygons
+- 🚀 **Faster** - Single invocation instead of three processes
+- 🎯 **Simpler** - One command, one output file
+- 💾 **Less I/O** - No intermediate files to write/read
+- ✅ **Reliable** - Single atomic operation, easier error handling
+- 📊 **Better rendering** - Centroids at lower zooms, full geometry at higher zooms
 
 ### PMTiles Streaming Support (Experimental)
 
