@@ -6,18 +6,56 @@ This is the Atlas fork of [Felt's Tippecanoe](https://github.com/felt/tippecanoe
 
 ## Custom Features
 
-### PMTiles Streaming Support
+### Dual Layer Generation (Active)
 
-We've added streaming support for PMTiles format to enable continuous tile generation and upload without buffering entire tilesets in memory. This is particularly useful for very large datasets.
+**Currently in use by Atlas GIS**
 
-**Key enhancements:**
-- Stream tiles directly to S3 or other storage backends
-- Reduced memory footprint for large tileset generation
-- Real-time progress monitoring via stderr
+Automatic generation of dual layers (geometry + centroids) in a single pass for improved rendering performance at different zoom levels. This is the primary feature we're actively using from this fork.
 
-### Dual Layer Support
+**Benefits:**
+- Single tippecanoe invocation generates both geometry and centroid layers
+- Improved map rendering performance at lower zoom levels
+- Centroids are pre-calculated and optimized for point representation of polygons
 
-Automatic generation of dual layers (geometry + centroids) in a single pass for improved rendering performance at different zoom levels.
+### PMTiles Streaming Support (Experimental)
+
+⚠️ **Note: PMTiles streaming has limitations and is not currently used in production**
+
+We've experimented with streaming support for PMTiles format, but discovered fundamental limitations with the PMTiles file format that make true streaming impractical:
+
+**The PMTiles Problem:**
+- PMTiles requires a complete directory/header at the start of the file
+- The header contains metadata about all tiles (offsets, sizes, zoom ranges)
+- This means you must know all tile information before writing the file
+- True streaming (write-as-you-generate) is not possible without buffering all tiles first
+
+**Why This Matters:**
+For very large datasets (millions of features), tippecanoe must:
+1. Generate all tiles into memory or temporary storage
+2. Build the complete tile directory
+3. Write the PMTiles file with header + directory + tiles
+
+This defeats the purpose of streaming and causes memory/disk pressure for large datasets.
+
+**Future Alternatives Under Consideration:**
+
+1. **Individual Tile Files (MBTiles/Directory structure)**
+   - Store each tile as a separate file: `{z}/{x}/{y}.pbf`
+   - Can stream directly to S3 or storage backend
+   - No buffering required, true streaming possible
+   - Used by many tile servers (tegola, martin)
+
+2. **Custom Tile Archive Format**
+   - Design our own streaming-friendly format
+   - Write tiles as they're generated with minimal metadata
+   - Build index separately or dynamically
+
+3. **MBTiles with Streaming Writes**
+   - SQLite-based MBTiles format
+   - Can insert tiles as generated without buffering
+   - Well-supported format but requires SQLite
+
+**Current Status:** We're using standard PMTiles output (non-streaming) and focusing on the dual layer generation feature which provides the most value.
 
 ### Performance Optimizations
 
@@ -48,11 +86,11 @@ The Dockerfile uses a multi-stage build to produce a minimal runtime image with 
 
 ## Changes from Upstream
 
-Our changes are focused on:
-1. **Streaming output** - `--stream-tiles` flag for continuous tile emission
-2. **PMTiles format improvements** - Better support for PMTiles v3 specification
-3. **Dual layer generation** - Automatic centroid layer creation
-4. **Performance tuning** - Optimizations for our specific use cases
+Our primary changes focus on:
+1. **Dual layer generation** - Automatic centroid layer creation alongside geometry (actively used)
+2. **Centroid calculation improvements** - Better handling of different geometry types
+3. **Performance tuning** - Optimizations for our specific use cases
+4. **Experimental streaming** - Initial streaming work (see limitations above, not in production)
 
 We try to keep this fork as close to upstream as possible and regularly sync with Felt's repository.
 
