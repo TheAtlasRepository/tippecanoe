@@ -79,6 +79,10 @@ extern bool dual_layers;
 extern std::string geometry_layer_name;
 extern std::string centroid_layer_name;
 
+// Pre-calculated centroids from external file
+extern std::string centroid_input_file;
+extern std::map<unsigned long long, drawvec> preloaded_centroids;
+
 int mkstemp_cloexec(char *name);
 FILE *fopen_oflag(const char *name, const char *mode, int oflag);
 bool progress_time();

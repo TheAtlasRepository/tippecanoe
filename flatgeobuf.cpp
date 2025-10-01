@@ -403,3 +403,141 @@ void parse_flatgeobuf(std::vector<struct serialization_state> *sst, const char *
 
 	fgbRunQueue();
 }
+
+void load_centroid_flatgeobuf(const char *src, size_t len, std::map<unsigned long long, drawvec> &centroids) {
+	// Verify magic bytes
+	if (memcmp(src, magicbytes, sizeof(magicbytes)) != 0) {
+		fprintf(stderr, "FlatGeobuf: Invalid magic bytes\n");
+		exit(EXIT_IMPOSSIBLE);
+	}
+	
+	// Read and verify header
+	auto header_size = flatbuffers::GetPrefixedSize((const uint8_t *)src + sizeof(magicbytes));
+	flatbuffers::Verifier v((const uint8_t *)src + sizeof(magicbytes), header_size + sizeof(uint32_t));
+	const auto ok = FlatGeobuf::VerifySizePrefixedHeaderBuffer(v);
+	if (!ok) {
+		fprintf(stderr, "flatgeobuf centroid header verification failed\n");
+		exit(EXIT_IMPOSSIBLE);
+	}
+	
+	auto header = FlatGeobuf::GetSizePrefixedHeader(src + sizeof(magicbytes));
+	
+	// Get column information to find the ID field
+	int id_column_index = -1;
+	auto columns = header->columns();
+	if (columns) {
+		for (size_t i = 0; i < columns->size(); i++) {
+			auto column = columns->Get(i);
+			if (column->name() && strcmp(column->name()->c_str(), "feature_id") == 0) {
+				id_column_index = i;
+				break;
+			}
+		}
+	}
+	
+	if (id_column_index < 0) {
+		fprintf(stderr, "Warning: No 'feature_id' column found in centroid FGB file\n");
+		return;
+	}
+	
+	// Get geometry type
+	auto h_geometry_type = header->geometry_type();
+	if (h_geometry_type != FlatGeobuf::GeometryType_Point && 
+	    h_geometry_type != FlatGeobuf::GeometryType_Unknown) {
+		fprintf(stderr, "Warning: Centroid FGB should contain Point geometries\n");
+	}
+	
+	// Skip index if present
+	size_t index_size = 0;
+	if (header->index_node_size() > 0 && header->features_count() > 0) {
+		index_size = PackedRTreeSize(header->features_count(), header->index_node_size());
+	}
+	
+	const char* start = src + sizeof(magicbytes) + sizeof(uint32_t) + header_size + index_size;
+	
+	// Read features
+	while (start < src + len) {
+		auto feature_size = flatbuffers::GetPrefixedSize((const uint8_t *)start);
+		
+		flatbuffers::Verifier v2((const uint8_t *)start, feature_size + sizeof(uint32_t));
+		const auto ok2 = FlatGeobuf::VerifySizePrefixedFeatureBuffer(v2);
+		if (!ok2) {
+			fprintf(stderr, "flatgeobuf centroid feature buffer verification failed\n");
+			exit(EXIT_IMPOSSIBLE);
+		}
+		
+		auto feature = FlatGeobuf::GetSizePrefixedFeature(start);
+		
+		// Get feature ID from properties
+		unsigned long long feature_id = 0;
+		bool has_id = false;
+		
+		auto properties = feature->properties();
+		if (properties && properties->size() > 0 && id_column_index >= 0) {
+			// Properties are stored as a byte buffer
+			const uint8_t* prop_data = properties->data();
+			size_t prop_offset = 0;
+			
+			// Parse properties to find the ID value
+			for (int i = 0; i <= id_column_index && prop_offset < properties->size(); i++) {
+				auto column = columns->Get(i);
+				auto col_type = column->type();
+				
+				if (i == id_column_index) {
+					// Read the feature ID value based on column type
+					switch (col_type) {
+						case FlatGeobuf::ColumnType_ULong:
+						case FlatGeobuf::ColumnType_Long:
+						case FlatGeobuf::ColumnType_UInt:
+						case FlatGeobuf::ColumnType_Int:
+							if (prop_offset + sizeof(uint64_t) <= properties->size()) {
+								feature_id = *((uint64_t*)(prop_data + prop_offset));
+								has_id = true;
+							}
+							break;
+						case FlatGeobuf::ColumnType_String:
+							// Skip string IDs for now
+							break;
+						default:
+							break;
+					}
+					break;
+				} else {
+					// Skip this property to get to the next one
+					// This is a simplified version - actual size depends on type
+					switch (col_type) {
+						case FlatGeobuf::ColumnType_ULong:
+						case FlatGeobuf::ColumnType_Long:
+							prop_offset += sizeof(uint64_t);
+							break;
+						case FlatGeobuf::ColumnType_UInt:
+						case FlatGeobuf::ColumnType_Int:
+							prop_offset += sizeof(uint32_t);
+							break;
+						case FlatGeobuf::ColumnType_Double:
+							prop_offset += sizeof(double);
+							break;
+						default:
+							// Skip unknown types
+							prop_offset = properties->size();
+							break;
+					}
+				}
+			}
+		}
+		
+		// Get centroid geometry
+		if (has_id && feature->geometry()) {
+			drawvec dv = readGeometry(feature->geometry(), h_geometry_type);
+			if (!dv.empty()) {
+				centroids[feature_id] = dv;
+			}
+		}
+		
+		start += sizeof(uint32_t) + feature_size;
+	}
+	
+	if (!quiet) {
+		fprintf(stderr, "Loaded %zu pre-calculated centroids from FGB file\n", centroids.size());
+	}
+}

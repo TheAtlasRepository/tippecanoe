@@ -104,6 +104,10 @@ size_t maximum_string_attribute_length = 0;
 bool dual_layers = false;
 std::string geometry_layer_name = "default";
 std::string centroid_layer_name = "centroids";
+
+// Pre-calculated centroids
+std::string centroid_input_file = "";
+std::map<unsigned long long, drawvec> preloaded_centroids;
 // Continuous tile streaming
 bool stream_tiles = false;
 // Optional binary framing for streaming output
@@ -1432,6 +1436,29 @@ std::pair<int, metadata> read_input(std::vector<source> &sources, char *fname, i
 	if (close(files_open_before_reading) != 0) {
 		perror("close");
 		exit(EXIT_CLOSE);
+	}
+
+	// Load pre-calculated centroids if provided
+	if (!centroid_input_file.empty() && dual_layers) {
+		int centroid_fd = open(centroid_input_file.c_str(), O_RDONLY | O_CLOEXEC);
+		if (centroid_fd < 0) {
+			perror(centroid_input_file.c_str());
+			fprintf(stderr, "Warning: Could not open centroid input file, will calculate centroids normally\n");
+		} else {
+			struct stat st;
+			if (fstat(centroid_fd, &st) == 0) {
+				char *centroid_map = (char *) mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, centroid_fd, 0);
+				if (centroid_map == MAP_FAILED) {
+					perror("mmap centroid file");
+					fprintf(stderr, "Warning: Could not mmap centroid file, will calculate centroids normally\n");
+				} else {
+					// Load centroids from FGB
+					load_centroid_flatgeobuf(centroid_map, st.st_size, preloaded_centroids);
+					munmap(centroid_map, st.st_size);
+				}
+			}
+			close(centroid_fd);
+		}
 	}
 
 	size_t nsources = sources.size();
@@ -3237,6 +3264,7 @@ int main(int argc, char **argv) {
 		{"dual-layers", no_argument, 0, '~'},
 		{"geometry-layer", required_argument, 0, '~'},
 		{"centroid-layer", required_argument, 0, '~'},
+		{"centroid-input", required_argument, 0, '~'},
 		{"stream-tiles", no_argument, 0, '~'},
 		{"stream-tiles-binary", no_argument, 0, '~'},
 
@@ -3374,6 +3402,8 @@ int main(int argc, char **argv) {
                 geometry_layer_name = optarg;
             } else if (strcmp(opt, "centroid-layer") == 0) {
                 centroid_layer_name = optarg;
+            } else if (strcmp(opt, "centroid-input") == 0) {
+                centroid_input_file = optarg;
             } else if (strcmp(opt, "stream-tiles") == 0) {
                 stream_tiles = true;
             } else if (strcmp(opt, "stream-tiles-binary") == 0) {

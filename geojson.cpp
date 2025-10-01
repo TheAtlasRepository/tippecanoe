@@ -218,7 +218,13 @@ int serialize_geojson_feature(struct serialization_state *sst, json_object *geom
 
 	// Calculate centroid once at feature creation time for dual layers
 	if (dual_layers && !dv.empty()) {
-		sf.original_centroid = calculate_geometry_centroid(dv, sf.t);
+		// Check if we have a pre-loaded centroid for this feature
+		if (has_id && preloaded_centroids.count(id_value) > 0) {
+			sf.original_centroid = preloaded_centroids[id_value];
+		} else {
+			// Calculate centroid if not pre-loaded
+			sf.original_centroid = calculate_geometry_centroid(dv, sf.t);
+		}
 	}
 
 	return serialize_feature(sst, sf, tippecanoe_layername);
