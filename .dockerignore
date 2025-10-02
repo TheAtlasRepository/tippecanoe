@@ -6,7 +6,9 @@ Dockerfile.centos7
 
 # Don't copy build artifacts
 *.o
+**/*.o
 *.d
+**/*.d
 tippecanoe
 tippecanoe-*
 tile-join

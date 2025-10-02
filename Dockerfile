@@ -14,7 +14,8 @@ WORKDIR /src
 COPY . /src
 
 # Clean any existing build artifacts and build all binaries
-RUN make clean && make -j"$(nproc)"
+# Use distclean to remove all build artifacts including .o files
+RUN make distclean || make clean || true && make -j"$(nproc)"
 
 FROM debian:bookworm-slim AS runtime
 ENV DEBIAN_FRONTEND=noninteractive
