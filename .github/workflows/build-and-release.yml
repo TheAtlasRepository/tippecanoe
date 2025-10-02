@@ -1,0 +1,131 @@
+name: Build and Release Tippecanoe
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., 2.79.0)'
+        required: false
+        default: ''
+
+jobs:
+  build-and-release:
+    name: Build Tippecanoe (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+
+    permissions:
+      contents: write  # Need write permission for GitHub Releases
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          elif [ -f version.hpp ]; then
+            VERSION=$(grep -oP '#define VERSION "\K[^"]+' version.hpp || echo "dev")
+          else
+            VERSION=$(git describe --tags --always)
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Building tippecanoe version: ${VERSION}"
+
+      - name: Build tippecanoe Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          target: runtime
+          tags: tippecanoe-${{ matrix.arch }}:${{ steps.version.outputs.version }}
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Extract binaries from Docker image
+        run: |
+          mkdir -p /tmp/tippecanoe-binaries
+          docker create --name tippecanoe-extract tippecanoe-${{ matrix.arch }}:${{ steps.version.outputs.version }}
+          docker cp tippecanoe-extract:/usr/local/bin/tippecanoe /tmp/tippecanoe-binaries/
+          docker cp tippecanoe-extract:/usr/local/bin/tippecanoe-decode /tmp/tippecanoe-binaries/
+          docker cp tippecanoe-extract:/usr/local/bin/tile-join /tmp/tippecanoe-binaries/
+          docker cp tippecanoe-extract:/usr/local/bin/tippecanoe-enumerate /tmp/tippecanoe-binaries/
+          docker cp tippecanoe-extract:/usr/local/bin/tippecanoe-json-tool /tmp/tippecanoe-binaries/
+          docker cp tippecanoe-extract:/usr/local/bin/tippecanoe-overzoom /tmp/tippecanoe-binaries/
+          docker rm tippecanoe-extract
+
+      - name: Create tarball
+        run: |
+          cd /tmp/tippecanoe-binaries
+          tar -czf tippecanoe-${{ steps.version.outputs.version }}-${{ matrix.arch }}.tar.gz *
+          ls -lh tippecanoe-${{ steps.version.outputs.version }}-${{ matrix.arch }}.tar.gz
+          mv tippecanoe-${{ steps.version.outputs.version }}-${{ matrix.arch }}.tar.gz /tmp/
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: Tippecanoe v${{ steps.version.outputs.version }}
+          body: |
+            # Tippecanoe v${{ steps.version.outputs.version }}
+
+            Precompiled binaries for Atlas fork of Tippecanoe with dual-layer support.
+
+            **Built from commit:** ${{ github.sha }}
+
+            ## Features
+            - Dual-layer generation (geometry + centroids in single pass)
+            - Standard tippecanoe features
+            - Built for both amd64 and arm64
+
+            ## Download
+
+            **Linux amd64 (x86_64):**
+            ```bash
+            curl -L https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.version }}/tippecanoe-${{ steps.version.outputs.version }}-amd64.tar.gz | tar -xz
+            ```
+
+            **Linux arm64 (aarch64):**
+            ```bash
+            curl -L https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.version }}/tippecanoe-${{ steps.version.outputs.version }}-arm64.tar.gz | tar -xz
+            ```
+
+            ## Verify
+            ```bash
+            ./tippecanoe --version
+            ./tile-join --version
+            ```
+
+            ## Binaries included
+            - `tippecanoe` - Main tile generation tool
+            - `tile-join` - Merge and manipulate vector tiles
+            - `tippecanoe-decode` - Decode vector tiles back to GeoJSON
+            - `tippecanoe-enumerate` - List tiles in an mbtiles file
+            - `tippecanoe-json-tool` - GeoJSON processing utilities
+            - `tippecanoe-overzoom` - Generate overzoomed tiles
+          files: |
+            /tmp/tippecanoe-${{ steps.version.outputs.version }}-${{ matrix.arch }}.tar.gz
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
