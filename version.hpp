@@ -1,6 +1,9 @@
 #ifndef VERSION_HPP
 #define VERSION_HPP
 
-#define VERSION "v2.80.0"
+// Version for Atlas fork of tippecanoe
+// This version is used by the GitHub Actions workflow to create releases
+// Update this when releasing a new version
+#define VERSION "2.80.1"
 
 #endif

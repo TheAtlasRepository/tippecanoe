@@ -42,7 +42,9 @@ jobs:
           elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF#refs/tags/v}"
           elif [ -f version.hpp ]; then
+            # Extract version from version.hpp and strip any 'v' prefix
             VERSION=$(grep -oP '#define VERSION "\K[^"]+' version.hpp || echo "dev")
+            VERSION="${VERSION#v}"  # Remove leading 'v' if present
           else
             VERSION=$(git describe --tags --always)
           fi
