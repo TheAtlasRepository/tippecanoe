@@ -107,7 +107,7 @@ std::string centroid_layer_name = "centroids";
 
 // Pre-calculated centroids
 std::string centroid_input_file = "";
-std::map<unsigned long long, drawvec> preloaded_centroids;
+std::unordered_map<unsigned long long, drawvec> preloaded_centroids;
 // Continuous tile streaming
 bool stream_tiles = false;
 // Optional binary framing for streaming output

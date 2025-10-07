@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <unordered_map>
 
 #include "json_logger.hpp"
 #include "serial.hpp"
@@ -81,7 +82,7 @@ extern std::string centroid_layer_name;
 
 // Pre-calculated centroids from external file
 extern std::string centroid_input_file;
-extern std::map<unsigned long long, drawvec> preloaded_centroids;
+extern std::unordered_map<unsigned long long, drawvec> preloaded_centroids;
 
 int mkstemp_cloexec(char *name);
 FILE *fopen_oflag(const char *name, const char *mode, int oflag);
