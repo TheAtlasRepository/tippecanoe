@@ -45,7 +45,9 @@ drawvec readPoints(const FlatGeobuf::Geometry *geometry) {
 
 	for (unsigned int i = 0; i < xy->size(); i+=2) {
 		long long x, y;
-		projection->project(xy->Get(i), xy->Get(i+1), 32, &x, &y);
+		double lon = xy->Get(i);
+		double lat = xy->Get(i+1);
+		projection->project(lon, lat, 32, &x, &y);
 		dv.push_back(draw(VT_MOVETO, x, y));
 	}
 	return dv;
@@ -251,6 +253,12 @@ void readFeature(const FlatGeobuf::Feature *feature, long long feature_sequence_
 	sf.full_keys = full_keys;
 	sf.full_values = full_values;
 
+	if (dual_layers && feature_sequence_id >= 0 && !dv.empty()) {
+		if (preloaded_centroids.count(feature_sequence_id) > 0) {
+			sf.original_centroid = preloaded_centroids[feature_sequence_id];
+		}
+	}
+
 	serialize_feature(sst, sf, layername);
 }
 
@@ -380,6 +388,8 @@ void parse_flatgeobuf(std::vector<struct serialization_state> *sst, const char *
 		}
 		index_size = PackedRTreeSize(features_count,node_size);
 		feature_sequence_id = 0;
+	} else if (dual_layers && !preloaded_centroids.empty()) {
+		feature_sequence_id = 0;
 	}
 	const char* start = src + sizeof(magicbytes) + sizeof(uint32_t) + header_size + index_size;
 
@@ -428,14 +438,12 @@ void load_centroid_flatgeobuf(const char *src, size_t len, std::unordered_map<un
 	const char* start = src + sizeof(magicbytes) + sizeof(uint32_t) + header_size + index_size;
 
 	// Read features and use sequential ID as the key
-	// The centroid FGB is exported in the same order as the geometry FGB,
+	// The centroid FGB is exported in the same order as the geometry FGB (both use ORDER BY id),
 	// so we use feature sequence (0, 1, 2, ...) as the lookup key.
 	unsigned long long feature_sequence_id = 0;
 
 	while (start < src + len) {
 		auto feature_size = flatbuffers::GetPrefixedSize((const uint8_t *)start);
-
-
 		auto feature = FlatGeobuf::GetSizePrefixedFeature(start);
 
 		// Get centroid geometry and store with sequential ID
@@ -450,7 +458,4 @@ void load_centroid_flatgeobuf(const char *src, size_t len, std::unordered_map<un
 		start += sizeof(uint32_t) + feature_size;
 	}
 
-	if (!quiet) {
-		fprintf(stderr, "Loaded %zu pre-calculated centroids from FGB file\n", centroids.size());
-	}
 }

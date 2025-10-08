@@ -2261,32 +2261,37 @@ long long write_tile(decompressor *geoms, std::atomic<long long> *geompos_in, ch
 						// Add original feature to geometry layer
 						added_feature = std::make_shared<serial_feature>(sf);
 						layers.find(geometry_layer_name)->second.features.push_back(added_feature);
-						
+
 						// Ensure centroid layer container exists
 						if (layers.count(centroid_layer_name) == 0) {
 							layers.emplace(centroid_layer_name, layer_features());
 						}
 						// Generate and add centroid feature
-						// Use pre-calculated centroid if available, otherwise calculate it
+						// Look up pre-calculated centroid from global map using feature sequence
 						drawvec cgeom;
-						if (!sf.original_centroid.empty()) {
-							// Use the pre-calculated centroid from feature creation (in world space)
-							cgeom = sf.original_centroid;
+						if (preloaded_centroids.count(sf.seq) > 0) {
+							cgeom = preloaded_centroids[sf.seq];
 						} else {
-							// Fallback to calculating from current geometry (for backward compatibility)
-							cgeom = calculate_geometry_centroid(sf.geometry, sf.t);
+							exit(EXIT_IMPOSSIBLE);
 						}
 
 						if (!cgeom.empty()) {
-							// Clip the centroid to the tile bounds (centroid might be outside tile)
-							cgeom = clip_point(cgeom, z, buffer);
-
-							if (!cgeom.empty()) {
-								serial_feature csf = sf;
-								csf.geometry = std::move(cgeom);
-								csf.t = VT_POINT;
-								layers.find(centroid_layer_name)->second.features.push_back(std::make_shared<serial_feature>(csf));
+							// Convert centroid from world coordinates to tile-relative coordinates
+							// Centroids are stored in world coordinates (z=32), but need to be relative to tile origin
+							// (same logic as decode_geometry in geometry.cpp)
+							if (z != 0) {
+								long long tile_x_offset = (long long) tx << (32 - z);
+								long long tile_y_offset = (long long) ty << (32 - z);
+								for (size_t i = 0; i < cgeom.size(); i++) {
+									cgeom[i].x -= tile_x_offset;
+									cgeom[i].y -= tile_y_offset;
+								}
 							}
+
+							serial_feature csf = sf;
+							csf.geometry = std::move(cgeom);
+							csf.t = VT_POINT;
+							layers.find(centroid_layer_name)->second.features.push_back(std::make_shared<serial_feature>(csf));
 						}
 					} else {
 						// Normal mode: add to default features vector
@@ -2645,12 +2650,8 @@ long long write_tile(decompressor *geoms, std::atomic<long long> *geompos_in, ch
 					continue;
 				}
 
-				// Scale geometry from world coordinates to tile coordinates
-				drawvec geom = layer_features[x]->geometry;
-				to_tile_scale(geom, z, tile_detail);
-
 				feature.type = layer_features[x]->t;
-				feature.geometry = to_feature(geom);
+				feature.geometry = to_feature(layer_features[x]->geometry);
 				count += layer_features[x]->geometry.size();
 				layer_features[x]->geometry.clear();
 
