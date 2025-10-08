@@ -437,24 +437,23 @@ void load_centroid_flatgeobuf(const char *src, size_t len, std::unordered_map<un
 
 	const char* start = src + sizeof(magicbytes) + sizeof(uint32_t) + header_size + index_size;
 
-	// Read features and use sequential ID as the key
-	// The centroid FGB is exported in the same order as the geometry FGB (both use ORDER BY id),
-	// so we use feature sequence (0, 1, 2, ...) as the lookup key.
-	unsigned long long feature_sequence_id = 0;
-
+	// Use sequential feature numbering (0, 1, 2, ...) to match with geometry features
+	// Both files should be in the same order (ORDER BY id)
+	unsigned long long feature_sequence = 0;
+	
 	while (start < src + len) {
 		auto feature_size = flatbuffers::GetPrefixedSize((const uint8_t *)start);
 		auto feature = FlatGeobuf::GetSizePrefixedFeature(start);
 
-		// Get centroid geometry and store with sequential ID
+		// Store centroid geometry with sequential feature number as the key
 		if (feature->geometry()) {
 			drawvec dv = readGeometry(feature->geometry(), h_geometry_type);
 			if (!dv.empty()) {
-				centroids[feature_sequence_id] = dv;
+				centroids[feature_sequence] = dv;
 			}
 		}
 
-		feature_sequence_id++;
+		feature_sequence++;
 		start += sizeof(uint32_t) + feature_size;
 	}
 
